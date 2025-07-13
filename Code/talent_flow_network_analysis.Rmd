@@ -1,0 +1,370 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+# Network Analysis on Talent Flow Between Firms
+
+This project explores LinkedIn-based talent movement among firms. We use network analysis to understand how employees flow between companies, identify key hubs, detect communities, and analyze network properties like assortativity and PageRank.
+
+## Load Required Libraries
+```{r}
+library(igraph)
+library(dplyr)
+library(readr)
+```
+
+## Load and Prepare Data
+```{r}
+df_company <- read.csv("linkedin_company_metadata.csv")
+df_talent_flows <- read.csv("talent_flows.csv")
+
+# Extract edges for network graph construction
+df_edges <- df_talent_flows %>% select(from, to)
+head(df_edges)
+```
+
+## Construct Directed Graph
+```{r}
+graph <- graph_from_data_frame(df_edges, directed = TRUE)
+summary(graph)
+
+plot(graph,
+     vertex.label = NA,
+     vertex.size = 3,
+     edge.arrow.size = 0.2,
+     main = "Overall Talent Flow Network")
+
+```
+
+## Compute Degree Metrics
+
+We examine in- and out-degrees to understand how firms attract or lose talent in the network.
+```{r}
+in_degrees <- degree(graph, mode = "in")
+out_degrees <- degree(graph, mode = "out")
+
+# Top 10 firms by in-degree and out-degree
+top_in_degrees <- sort(in_degrees, decreasing = TRUE)[1:10]
+top_out_degrees <- sort(out_degrees, decreasing = TRUE)[1:10]
+
+top_in_degrees
+top_out_degrees
+```
+
+## Understanding In-Degree and Out-Degree in a Talent Flow Network
+
+The computed **in-degree** reflects how often a firm is chosen as the next career step. A high in-degree suggests a firm is an attractive destination, often due to:
+
+- Strong market reputation  
+- Growth opportunities  
+- Competitive employee benefits  
+- Strategic positioning within the industry
+
+The **out-degree** metric, on the other hand, represents how many employees are leaving a firm for other firms.  
+A high out-degree might indicate that a firm is:
+
+- Undergoing organizational changes (e.g., restructuring or downsizing)  
+- A major source of talent development (feeding into other firms)  
+- Experiencing talent loss due to better offers elsewhere  
+
+### Examples
+
+- **High In-Degree Firms** (e.g., IBM, Accenture, Hewlett-Packard Enterprise):  
+  These companies attract a large number of incoming employees and are considered top destinations within the professional network.
+
+- **High Out-Degree Firms** (e.g., IBM, AT&T, Hewlett-Packard Enterprise):  
+  These firms have significant talent outflow, which could reflect internal shifts, competitive poaching, or their role as training grounds.
+
+---
+
+## Why Are High-Degree Firms Often Large Firms?
+
+This aligns with earlier observations—firms with the highest degrees tend to be larger. Possible reasons include:
+
+- **Larger Workforce**: Bigger firms have more employees, resulting in more natural inflow and outflow.
+- **Diverse Opportunities**: A wider range of roles attracts a more diverse talent pool.
+- **Stronger Brand Recognition**: Well-known firms are more desirable to job seekers.
+- **Greater Market Visibility**: Large companies appear more often on job platforms and in professional networks.
+- **More Recruitment Resources**: Bigger budgets allow for more effective hiring strategies.
+
+> **In summary:**  
+> Firm size significantly impacts talent flow dynamics.  
+> Larger companies tend to attract and release more employees due to their visibility, scale, and organizational capacity.
+
+
+
+## Analyze Degree vs Firm Size via Linear Regression
+
+We assess how firm size (employee count) impacts talent inflow/outflow.
+```{r}
+firm_data <- data.frame(name = V(graph)$name, in_degree = in_degrees, out_degree = out_degrees)
+firm_data <- merge(firm_data, df_company, by.x = "name", by.y = "company_id")
+
+model_in_degree <- lm(in_degree ~ emp_count, data = firm_data)
+summary(model_in_degree)
+
+model_out_degree <- lm(out_degree ~ emp_count, data = firm_data)
+summary(model_out_degree)
+```
+
+## Linear Regression Results: Employee Count vs. In-/Out-Degree
+
+To assess whether firm size (measured by employee count) influences talent movement, we ran two linear regressions:
+
+- One with **in-degree** as the dependent variable  
+- One with **out-degree** as the dependent variable
+
+---
+
+### In-Degree Model
+
+- **Intercept**: ~136.6  
+  This is the expected in-degree when the employee count is zero. While theoretical (as firms can’t actually have zero employees), it serves as a baseline for the model.
+
+- **Coefficient for `emp_count`**: ~0.0009545  
+  Each additional employee is associated with an increase of approximately 0.00095 in in-degree, suggesting a positive relationship between firm size and in-degree.
+
+- **P-values**:  
+  Both the intercept and the employee count coefficient are statistically significant (p < 0.05).
+
+- **R-squared**: 0.504  
+  About 50.4% of the variation in in-degree is explained by employee count.
+
+---
+
+### Out-Degree Model
+
+- **Intercept**: ~132.9  
+  Represents the expected out-degree at zero employees (again, a theoretical value).
+
+- **Coefficient for `emp_count`**: ~0.001055  
+  Each additional employee corresponds to an increase of approximately 0.00106 in out-degree, indicating a positive relationship.
+
+- **P-values**:  
+  Both coefficients are statistically significant (p < 0.05).
+
+- **R-squared**: 0.515  
+  About 51.5% of the variation in out-degree is explained by employee count.
+
+---
+
+### Interpretation
+
+Both models reveal a **statistically significant and positive relationship** between firm size and degree centrality:
+
+- Larger firms tend to have **higher in-degrees** (receive more incoming talent) and **higher out-degrees** (send out more employees).
+- The R-squared values around 50% indicate that employee count is an important factor, though not the only one.
+- The effect is slightly stronger for **out-degree**, but both relationships are similar in strength.
+
+These findings support the intuition that **larger firms play a central role in talent flow networks**, both as talent attractors and as sources of talent.
+
+
+## Add Weighted Edges Based on Migration per Employee
+```{r}
+df_talent_flows_merged <- merge(df_talent_flows, df_company[, c('company_id', 'emp_count')],
+                                 by.x = 'from', by.y = 'company_id', all.x = TRUE)
+
+df_talent_flows_merged$weight <- df_talent_flows_merged$migration_count / df_talent_flows_merged$emp_count
+
+df_edges_with_weight <- merge(df_edges, df_talent_flows_merged[, c('from', 'to', 'weight')],
+                               by = c('from', 'to'), all.x = TRUE)
+
+df_edges <- df_edges_with_weight
+head(df_edges)
+```
+
+## Construct Weighted Graph
+```{r}
+df_edges <- df_edges[, c("from", "to", "weight")]
+str(df_edges)
+
+graph_df_edges <- graph_from_data_frame(df_edges, directed = TRUE)
+summary(graph_df_edges)
+```
+
+## Visualize Top-Weighted Talent Flows
+```{r}
+top_edges <- head(df_edges[order(-df_edges$weight), ], 10)
+g_top_edges <- graph_from_data_frame(top_edges, directed = TRUE)
+
+plot(g_top_edges, edge.label = E(g_top_edges)$weight)
+```
+
+## Network Metrics on Top Edges
+```{r}
+cat("Number of Nodes:", vcount(g_top_edges), "\n")
+cat("Number of Edges:", ecount(g_top_edges), "\n")
+
+degree_distribution <- degree(g_top_edges, mode = "all")
+cat("Degree Centrality:", degree_distribution, "\n")
+
+betweenness_distribution <- betweenness(g_top_edges)
+cat("Betweenness Centrality:", betweenness_distribution, "\n")
+
+plot(g_top_edges)
+```
+
+
+## Interpreting High-Weight Edges in the Talent Flow Network
+
+In this network, an edge's **weight** represents the proportion of employees moving from one firm (`from`) to another (`to`), relative to the size of the source firm.  
+A **high-weight edge** indicates a notably strong talent flow between two firms.
+
+---
+
+### What Do High Weights Suggest?
+
+- **High Employee Turnover**: The source firm may be experiencing internal change, dissatisfaction, or talent poaching.
+- **Attractive Destinations**: Destination firms may offer better career prospects, higher compensation, or stronger employer branding.
+- **Industry Trends**: High-weight edges within the same industry may reflect strong sector-specific mobility.
+
+---
+
+### Notable Observations from the Graph
+
+- **Spin-Offs and Restructuring**: Some connections link firms with historical ties, suggesting transitional movement after corporate restructuring.
+- **Competitive Hiring**: Edges between direct competitors may indicate aggressive talent acquisition or career-driven switches.
+- **Cross-Sector Mobility**: Movement across industries may signal broader economic shifts or emerging talent needs.
+
+---
+
+### Summary
+
+High-weight edges reveal meaningful dynamics in the job market—identifying firms that are central hubs of talent movement.  
+These patterns offer insight into employee behavior, firm reputation, and industry evolution.
+
+For deeper understanding, further qualitative analysis may be needed, such as reviewing external factors like market conditions or firm-level strategies.
+
+# Understanding PageRank and the Random Surfer Model
+
+The **PageRank** algorithm ranks the importance of nodes in a network based on the idea of a _random surfer_.
+
+### The Intuition
+
+Imagine a person randomly clicking through links on a website (or navigating a network of firms).  
+Each time they arrive at a node, they randomly select an outgoing edge to follow.
+
+- The **more frequently** a node is visited during this process, the **higher its PageRank**.
+- The algorithm captures the idea that **important nodes are likely to be visited more often**.
+
+---
+
+### Unweighted vs. Weighted Networks
+
+- In an **unweighted graph**, the surfer has an **equal probability** of choosing any of the outgoing edges from a node.
+- In a **weighted graph**, the surfer is **more likely to follow edges with higher weights**.
+
+> This means that in weighted networks, transitions are **biased toward stronger or more significant connections**.
+
+As a result, nodes connected by high-weight edges are more influential, and the PageRank distribution becomes more concentrated around those nodes.
+
+---
+
+This weighted approach better captures real-world dynamics—such as employee flows between firms—where not all connections are equally likely or important.
+
+
+## PageRank: Unweighted vs Weighted
+```{r}
+pr_unweighted <- page_rank(graph_df_edges, algo="prpack", weights = NA)
+pr_weighted <- page_rank(graph_df_edges, algo="prpack", weights = E(graph_df_edges)$weight)
+
+top_nodes_unweighted <- head(sort(pr_unweighted$vector, decreasing = TRUE), 10)
+top_nodes_weighted <- head(sort(pr_weighted$vector, decreasing = TRUE), 10)
+
+top_nodes_unweighted
+top_nodes_weighted
+```
+
+## Visualize PageRank Distributions
+```{r}
+library(ggplot2)
+
+df_unweighted <- data.frame(PageRank = pr_unweighted$vector)
+df_weighted <- data.frame(PageRank = pr_weighted$vector)
+
+ggplot(df_unweighted, aes(x = PageRank)) +
+  geom_histogram(bins = 30, fill = 'blue', alpha = 0.7) +
+  labs(title = "Histogram of Unweighted PageRank",
+       x = "PageRank value",
+       y = "Frequency")
+
+ggplot(df_weighted, aes(x = PageRank)) +
+  geom_histogram(bins = 30, fill = 'green', alpha = 0.7) +
+  labs(title = "Histogram of Weighted PageRank",
+       x = "PageRank value",
+       y = "Frequency")
+```
+The significant difference in distributions shows that the edge weights have a major impact on the importance of nodes in the network. Nodes with high-weight inbound edges are considered much more important in the weighted PageRank algorithm.
+
+The key difference between the two calculations is that the weighted PageRank takes into account the 'strength' or 'significance' of the connections between nodes, while the unweighted PageRank does not. As a result, in the weighted PageRank, nodes that are connected by edges with higher weights will have their importance exaggerated compared to those with lower-weighted connections. This often leads to a more polarized distribution where a few nodes have much higher importance scores than the rest.
+
+
+## Detect Communities with Walktrap Algorithm
+```{r}
+wt_communities <- walktrap.community(graph_df_edges, steps = 4)
+membership <- membership(wt_communities)
+sizes(wt_communities)
+
+plot(graph_df_edges, vertex.color = membership(wt_communities), asp = FALSE, edge.arrow.size = 0.5)
+```
+
+## Explore Community Characteristics
+```{r}
+membership_vector <- as.numeric(membership(wt_communities))
+company_names <- V(graph_df_edges)$name
+
+community_data <- data.frame(company_id = company_names, community = membership_vector)
+extended_community_data <- merge(community_data, df_company, by = "company_id")
+
+for(i in unique(extended_community_data$community)) {
+  cat("Community", i, ":\n")
+  community_subset <- subset(extended_community_data, community == i, select = c(company_id, community, industry))
+  print(community_subset)
+  cat("\n\n")
+}
+```
+
+
+## Community Detection Insights
+
+Based on the results, each detected community largely consists of firms from the same or related industries.  
+This suggests that companies tend to form communities based on industry affinity.
+
+### Key Patterns and Implications
+
+1. **Industry Clustering**  
+   Firms within the same or similar industries tend to be more interconnected through talent flows and business relationships.
+
+2. **Strategic Alignment**  
+   Some communities may reflect strategic partnerships, supply chains, or a shared market focus.
+
+3. **Knowledge and Talent Exchange**  
+   Intra-industry communities can facilitate the flow of expertise and innovation, which are critical for competitiveness and growth.
+
+These patterns provide insight into how industry structure influences firm interactions and highlight potential collaboration or talent movement within sectors.
+
+---
+
+## Understanding Assortative Mixing
+
+**Assortative mixing** describes the tendency of nodes in a network to connect with others that share similar characteristics.
+
+In this context, assortative mixing by **industry** means that firms are more likely to connect (e.g., through talent flow or business relationships) with other firms in the **same industry**, rather than with firms from different sectors.
+
+
+## Compute Assortativity by Industry
+```{r}
+industries <- df_company$industry[match(V(graph_df_edges)$name, df_company$company_id)]
+industries <- factor(industries)
+
+assortativity_coefficient <- assortativity(graph_df_edges, types1 = industries, directed = FALSE)
+print(assortativity_coefficient)
+```
+
+---
+This concludes the end-to-end analysis of a talent flow network using `igraph` in R. The project identifies key players in employee movement, explores community and industry-level patterns, and investigates structural dynamics such as assortativity and influence.
+
+
